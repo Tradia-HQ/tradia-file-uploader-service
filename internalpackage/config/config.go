@@ -30,10 +30,10 @@ type Config struct {
 	}
 }
 
-func LoadConfig() (*Config, error) {
+func LoadConfig() (Config, error) {
 	_ = godotenv.Load() // Load .env file
 
-	cfg := &Config{
+	cfg := Config{
 		Provider: os.Getenv("STORAGE_PROVIDER"),
 	}
 	cfg.GCS.ProjectID = os.Getenv("GCS_PROJECT_ID")
