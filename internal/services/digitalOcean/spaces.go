@@ -1,0 +1,120 @@
+package digitalOcean
+
+import (
+	"context"
+	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/google/uuid"
+	"io"
+	"strings"
+	"time"
+)
+
+type SpacesService struct {
+	client     *s3.Client
+	bucketName string
+	region     string
+}
+
+func NewSpacesService(region, bucketName, accessKey, secretKey, endpoint string) (*SpacesService, error) {
+	resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+		return aws.Endpoint{
+			URL:           fmt.Sprintf("https://%s", endpoint),
+			SigningRegion: region,
+		}, nil
+	})
+
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion(region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+		config.WithEndpointResolverWithOptions(resolver),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load Spaces config: %w", err)
+	}
+
+	client := s3.NewFromConfig(cfg)
+	return &SpacesService{
+		client:     client,
+		bucketName: bucketName,
+		region:     region,
+	}, nil
+}
+
+func (s *SpacesService) Upload(ctx context.Context, file io.Reader, filename string, contentType string) (string, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if seeker, ok := file.(io.Seeker); ok {
+		size, err := seeker.Seek(0, io.SeekEnd)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to check file size: %w", err)
+		}
+		if size == 0 {
+			return "", "", fmt.Errorf("input file is empty")
+		}
+		_, err = seeker.Seek(0, io.SeekStart)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to reset file stream: %w", err)
+		}
+	}
+
+	fName := fmt.Sprintf("%s-%s", uuid.New().String(), filename)
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucketName),
+		Key:         aws.String(fName),
+		Body:        file,
+		ContentType: aws.String(contentType),
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("failed to upload file: %w", err)
+	}
+
+	publicURL := fmt.Sprintf("https://%s.%s.digitaloceanspaces.com/%s", s.bucketName, s.region, fName)
+	return publicURL, fName, nil
+}
+
+func (s *SpacesService) Delete(ctx context.Context, fileURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	filename := extractFilename(fileURL, s.bucketName, s.region)
+	if filename == "" {
+		return fmt.Errorf("invalid file URL: %s", fileURL)
+	}
+
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(filename),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+	return nil
+}
+
+func (s *SpacesService) GetSignedURL(ctx context.Context, filename string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	presignClient := s3.NewPresignClient(s.client)
+	resp, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(filename),
+	}, s3.WithPresignExpires(15*time.Minute))
+	if err != nil {
+		return "", fmt.Errorf("failed to generate signed URL: %w", err)
+	}
+	return resp.URL, nil
+}
+
+func extractFilename(fileURL, bucketName, region string) string {
+	prefix := fmt.Sprintf("https://%s.%s.digitaloceanspaces.com/", bucketName, region)
+	if strings.HasPrefix(fileURL, prefix) {
+		return strings.TrimPrefix(fileURL, prefix)
+	}
+	return ""
+}
