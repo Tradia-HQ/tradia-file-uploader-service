@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/Tradia-HQ/tradia-file-uploader-service/internal/config"
-	"github.com/Tradia-HQ/tradia-file-uploader-service/internal/services"
-	"github.com/Tradia-HQ/tradia-file-uploader-service/pkg"
+	"github.com/Tradia-HQ/tradia-file-uploader-service/internalpackage/config"
+	"github.com/Tradia-HQ/tradia-file-uploader-service/internalpackage/services"
+	"github.com/Tradia-HQ/tradia-file-uploader-service/internalpackage/services/interfaces"
 	"github.com/gin-gonic/gin"
 	"log"
 	"net/http"
@@ -16,7 +16,7 @@ const (
 )
 
 type App struct {
-	uploader pkg.FileUploader
+	uploader interfaces.FileUploader
 }
 
 func main() {
